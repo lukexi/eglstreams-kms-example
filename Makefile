@@ -25,6 +25,7 @@ SOURCES += utils.c
 SOURCES += eglgears.c
 
 HEADERS += egl.h
+HEADERS += eglextnv.h
 HEADERS += kms.h
 HEADERS += utils.h
 HEADERS += eglgears.h
