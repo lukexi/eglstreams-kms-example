@@ -22,11 +22,12 @@
 
 #if !defined(KMS_H)
 #define KMS_H
-
+#include "edid.h"
 typedef struct {
     uint32_t PlaneID;
     int Width;
     int Height;
+    drm_edid* EDID;
 } kms_plane;
 
 kms_plane* SetDisplayModes(int drmFd, int* NumPlanes);

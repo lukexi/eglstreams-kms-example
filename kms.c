@@ -34,7 +34,6 @@
 
 #include "kms.h"
 #include "utils.h"
-#include "edid.h"
 
 struct Config {
     uint32_t connectorID;
@@ -42,7 +41,7 @@ struct Config {
     int crtcIndex;
     uint32_t planeID;
     drmModeModeInfo mode;
-    drmModePropertyBlobPtr edidBlobPtr;
+    drm_edid* edid;
     uint16_t width;
     uint16_t height;
 };
@@ -202,27 +201,36 @@ static bool PickConnector(int drmFd,
 
         pConfig->connectorID = pModeRes->connectors[connIndex];
         pConfig->mode = pConnector->modes[0];
-        pConfig->edidBlobPtr = GetPropertyBlobValue(drmFd,
+
+        // Get the EDID data blob
+        drmModePropertyBlobPtr edidBlobPtr = GetPropertyBlobValue(drmFd,
             pModeRes->connectors[connIndex],
             DRM_MODE_OBJECT_CONNECTOR,
             "EDID");
-        printf("Got EDID blob %p of size %u.\n",
-               pConfig->edidBlobPtr->data,
-               pConfig->edidBlobPtr->length);
 
+        printf("Got EDID blob %p of size %u.\n",
+               edidBlobPtr->data,
+               edidBlobPtr->length);
+
+        // Parse the EDID blob into useful strings
         drm_edid* edid = calloc(1, sizeof(drm_edid));
         int rc = edid_parse(edid,
-                pConfig->edidBlobPtr->data,
-                pConfig->edidBlobPtr->length);
+                edidBlobPtr->data,
+                edidBlobPtr->length);
+        // Free the blob; we've extracted what we needed.
+        drmModeFreePropertyBlob(edidBlobPtr);
+
         if (!rc) {
             printf("EDID data '%s', '%s', '%s'\n",
-                   edid->pnp_id,
-                   edid->monitor_name,
-                   edid->serial_number);
+                   edid->PNPID,
+                   edid->MonitorName,
+                   edid->SerialNumber);
         }
 
+        pConfig->edid = edid;
+
         printf("Connector ID: %i\n", pConfig->connectorID);
-        printf("Connector ID: %i\n", connIndex);
+        printf("Connector Index: %i\n", connIndex);
         printf("Num CRTCS: %i\n", pModeRes->count_crtcs);
         printf("Num Connectors: %i\n", pModeRes->count_connectors);
         for (int crtcIndex = 0; crtcIndex < pModeRes->count_crtcs; crtcIndex++) {
@@ -294,6 +302,7 @@ static void PickPlane(int drmFd, struct Config *pConfig)
 
     drmModeFreePlaneResources(pPlaneRes);
 
+    printf("Plane ID: %i\n", pConfig->planeID);
     if (pConfig->planeID == 0) {
         Fatal("Could not find a suitable plane.\n");
     }
@@ -601,6 +610,8 @@ kms_plane* SetDisplayModes(int drmFd, int *NumPlanes) {
         Planes[PlaneIndex].PlaneID = config.planeID;
         Planes[PlaneIndex].Width = config.width;
         Planes[PlaneIndex].Height = config.height;
+        Planes[PlaneIndex].EDID = config.edid;
+
         PlaneIndex++;
     }
     drmModeFreeResources(pModeRes);
