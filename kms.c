@@ -22,6 +22,8 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include <stdbool.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
 #include <unistd.h>
@@ -74,68 +76,65 @@ struct PropertyIDAddresses {
 
 
 /*
- * Pick the first connected connector we find with usable modes and
+ * Check if this connector is connected and has usable modes and
  * CRTC.
  */
-static void PickConnector(int drmFd,
+static bool PickConnector(int drmFd,
                           drmModeResPtr pModeRes,
-                          struct Config *pConfig)
-{
-    int i, j;
+                          int connIndex,
+                          struct Config *pConfig) {
 
-    for (i = 0; i < pModeRes->count_connectors; i++) {
+    drmModeConnectorPtr pConnector =
+        drmModeGetConnector(drmFd, pModeRes->connectors[connIndex]);
 
-        drmModeConnectorPtr pConnector =
-            drmModeGetConnector(drmFd, pModeRes->connectors[i]);
+    if (pConnector == NULL) {
+        Fatal("Unable to query DRM-KMS information for "
+              "connector index %d\n", connIndex);
+    }
 
-        if (pConnector == NULL) {
-            Fatal("Unable to query DRM-KMS information for "
-                  "connector index %d\n", i);
+    if ((pConnector->connection == DRM_MODE_CONNECTED) &&
+        (pConnector->count_modes > 0) &&
+        (pConnector->count_encoders > 0)) {
+
+        drmModeEncoderPtr pEncoder =
+            drmModeGetEncoder(drmFd, pConnector->encoders[0]);
+
+        if (pEncoder == NULL) {
+            Fatal("Unable to query DRM-KMS information for"
+                  "encoder 0x%08x\n", pConnector->encoders[0]);
         }
 
-        if ((pConnector->connection == DRM_MODE_CONNECTED) &&
-            (pConnector->count_modes > 0) &&
-            (pConnector->count_encoders > 0)) {
-
-            drmModeEncoderPtr pEncoder =
-                drmModeGetEncoder(drmFd, pConnector->encoders[0]);
-
-            if (pEncoder == NULL) {
-                Fatal("Unable to query DRM-KMS information for"
-                      "encoder 0x%08x\n", pConnector->encoders[0]);
+        pConfig->connectorID = pModeRes->connectors[connIndex];
+        pConfig->mode = pConnector->modes[0];
+        printf("Connector ID: %i\n", pConfig->connectorID);
+        printf("Connector ID: %i\n", connIndex);
+        printf("Num CRTCS: %i\n", pModeRes->count_crtcs);
+        printf("Num Connectors: %i\n", pModeRes->count_connectors);
+        for (int crtcIndex = 0; crtcIndex < pModeRes->count_crtcs; crtcIndex++) {
+            if (crtcIndex < connIndex) {
+                continue;
             }
 
-            pConfig->connectorID = pModeRes->connectors[i];
-            pConfig->mode = pConnector->modes[0];
-
-            for (j = 0; j < pModeRes->count_crtcs; j++) {
-
-                if ((pEncoder->possible_crtcs & (1 << j)) == 0) {
-                    continue;
-                }
-
-                pConfig->crtcID = pModeRes->crtcs[j];
-                pConfig->crtcIndex = j;
-                break;
+            if ((pEncoder->possible_crtcs & (1 << crtcIndex)) == 0) {
+                continue;
             }
 
-            if (pConfig->crtcID == 0) {
-                Fatal("Unable to select a suitable CRTC.\n");
-            }
-
-            drmModeFreeEncoder(pEncoder);
+            pConfig->crtcID = pModeRes->crtcs[crtcIndex];
+            printf("CRTC ID: %i\n", pConfig->crtcID);
+            pConfig->crtcIndex = crtcIndex;
+            break;
         }
 
-        drmModeFreeConnector(pConnector);
+        if (pConfig->crtcID == 0) {
+            Fatal("Unable to select a suitable CRTC.\n");
+        }
+
+        drmModeFreeEncoder(pEncoder);
     }
 
-    if (pConfig->connectorID == 0) {
-        Fatal("Could not find a suitable connector.\n");
-    }
+    drmModeFreeConnector(pConnector);
 
-    if (pConfig->crtcID == 0) {
-        Fatal("Could not find a suitable CRTC.\n");
-    }
+    return pConfig->connectorID != 0 && pConfig->crtcID != 0;
 }
 
 
@@ -235,37 +234,17 @@ static void PickPlane(int drmFd, struct Config *pConfig)
 /*
  * Pick a connector, CRTC, and plane to use for the modeset.
  */
-static void PickConfig(int drmFd, struct Config *pConfig)
+static bool PickConfig(int drmFd, drmModeResPtr pModeRes, int connIndex, struct Config *pConfig)
 {
-    drmModeResPtr pModeRes;
-    int ret;
-
-    ret = drmSetClientCap(drmFd, DRM_CLIENT_CAP_UNIVERSAL_PLANES, 1);
-
-    if (ret != 0) {
-        Fatal("DRM_CLIENT_CAP_UNIVERSAL_PLANES not available.\n");
+    if (!PickConnector(drmFd, pModeRes, connIndex, pConfig)) {
+        return false;
     }
-
-    ret = drmSetClientCap(drmFd, DRM_CLIENT_CAP_ATOMIC, 1);
-
-    if (ret != 0) {
-        Fatal("DRM_CLIENT_CAP_ATOMIC not available.\n");
-    }
-
-    pModeRes = drmModeGetResources(drmFd);
-
-    if (pModeRes == NULL) {
-        Fatal("Unable to query DRM-KMS resources.\n");
-    }
-
-    PickConnector(drmFd, pModeRes, pConfig);
 
     PickPlane(drmFd, pConfig);
 
-    drmModeFreeResources(pModeRes);
-
     pConfig->width = pConfig->mode.hdisplay;
     pConfig->height = pConfig->mode.vdisplay;
+    return true;
 }
 
 
@@ -503,32 +482,61 @@ static void AssignAtomicRequest(int drmFd,
  * present, and its dimensions.  On failure, exit with a fatal error
  * message.
  */
-void SetMode(int drmFd, uint32_t *pPlaneID, int *pWidth, int *pHeight)
-{
-    struct Config config = { 0 };
-    drmModeAtomicReqPtr pAtomic;
-    uint32_t modeID, fb;
-    int ret;
+
+
+kms_plane* SetDisplayModes(int drmFd, int *NumPlanes) {
+
     const uint32_t flags = DRM_MODE_ATOMIC_ALLOW_MODESET;
 
-    PickConfig(drmFd, &config);
-
-    modeID = CreateModeID(drmFd, &config);
-    fb = CreateFb(drmFd, &config);
-
-    pAtomic = drmModeAtomicAlloc();
-
-    AssignAtomicRequest(drmFd, pAtomic, &config, modeID, fb);
-
-    ret = drmModeAtomicCommit(drmFd, pAtomic, flags, NULL /* user_data */);
-
-    drmModeAtomicFree(pAtomic);
-
+    int ret;
+    ret = drmSetClientCap(drmFd, DRM_CLIENT_CAP_UNIVERSAL_PLANES, 1);
     if (ret != 0) {
-        Fatal("Failed to set mode.\n");
+        Fatal("DRM_CLIENT_CAP_UNIVERSAL_PLANES not available.\n");
     }
 
-    *pPlaneID = config.planeID;
-    *pWidth = config.width;
-    *pHeight = config.height;
+    ret = drmSetClientCap(drmFd, DRM_CLIENT_CAP_ATOMIC, 1);
+    if (ret != 0) {
+        Fatal("DRM_CLIENT_CAP_ATOMIC not available.\n");
+    }
+
+
+    drmModeResPtr pModeRes = drmModeGetResources(drmFd);
+    if (pModeRes == NULL) {
+        Fatal("Unable to query DRM-KMS resources.\n");
+    }
+
+    kms_plane* Planes = malloc(sizeof(kms_plane) * pModeRes->count_connectors);
+    int PlaneIndex = 0;
+    for (int connIndex = 0; connIndex < pModeRes->count_connectors; connIndex++) {
+        struct Config config = { 0 };
+
+        if (!PickConfig(drmFd, pModeRes, connIndex, &config)) {
+            continue;
+        }
+
+        uint32_t modeID = CreateModeID(drmFd, &config);
+        uint32_t fb     = CreateFb(drmFd, &config);
+
+        drmModeAtomicReqPtr pAtomic = drmModeAtomicAlloc();
+
+        AssignAtomicRequest(drmFd, pAtomic, &config, modeID, fb);
+
+        ret = drmModeAtomicCommit(drmFd, pAtomic, flags, NULL /* user_data */);
+
+        drmModeAtomicFree(pAtomic);
+
+        if (ret != 0) {
+            Fatal("Failed to set mode.\n");
+        }
+
+        Planes[PlaneIndex].PlaneID = config.planeID;
+        Planes[PlaneIndex].Width = config.width;
+        Planes[PlaneIndex].Height = config.height;
+        PlaneIndex++;
+    }
+    drmModeFreeResources(pModeRes);
+
+    *NumPlanes = PlaneIndex;
+
+    return Planes;
 }

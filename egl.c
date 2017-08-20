@@ -230,11 +230,7 @@ EGLDisplay GetEglDisplay(EGLDeviceEXT device, int drmFd)
 }
 
 
-/*
- * Set up EGL to present to a DRM KMS plane through an EGLStream.
- */
-EGLSurface SetUpEgl(EGLDisplay eglDpy, uint32_t planeID, int width, int height)
-{
+EGLConfig GetEglConfig(EGLDisplay eglDpy) {
     EGLint configAttribs[] = {
         EGL_SURFACE_TYPE, EGL_STREAM_BIT_KHR,
         EGL_RENDERABLE_TYPE, EGL_OPENGL_BIT,
@@ -245,30 +241,6 @@ EGLSurface SetUpEgl(EGLDisplay eglDpy, uint32_t planeID, int width, int height)
         EGL_DEPTH_SIZE, 1,
         EGL_NONE,
     };
-
-    EGLint contextAttribs[] = { EGL_NONE };
-
-    EGLAttrib layerAttribs[] = {
-        EGL_DRM_PLANE_EXT,
-        planeID,
-        EGL_NONE,
-    };
-
-    EGLint streamAttribs[] = { EGL_NONE };
-
-    EGLint surfaceAttribs[] = {
-        EGL_WIDTH, width,
-        EGL_HEIGHT, height,
-        EGL_NONE
-    };
-
-    EGLConfig eglConfig;
-    EGLContext eglContext;
-    EGLint n = 0;
-    EGLBoolean ret;
-    EGLOutputLayerEXT eglLayer;
-    EGLStreamKHR eglStream;
-    EGLSurface eglSurface;
 
     const char *extensionString = eglQueryString(eglDpy, EGL_EXTENSIONS);
 
@@ -310,92 +282,142 @@ EGLSurface SetUpEgl(EGLDisplay eglDpy, uint32_t planeID, int width, int height)
     eglBindAPI(EGL_OPENGL_API);
 
     /* Find a suitable EGL config. */
-
-    ret = eglChooseConfig(eglDpy, configAttribs, &eglConfig, 1, &n);
+    EGLint n = 0;
+    EGLConfig eglConfig;
+    EGLBoolean ret = eglChooseConfig(eglDpy, configAttribs, &eglConfig, 1, &n);
 
     if (!ret || !n) {
         Fatal("eglChooseConfig() failed.\n");
     }
 
-    /* Create an EGL context using the EGL config. */
+    return eglConfig;
+}
 
-    eglContext =
+EGLContext GetEglContext(EGLDisplay eglDpy, EGLConfig eglConfig) {
+    /* Create an EGL context using the EGL config. */
+    EGLint contextAttribs[] = { EGL_NONE };
+    EGLContext eglContext =
         eglCreateContext(eglDpy, eglConfig, EGL_NO_CONTEXT, contextAttribs);
 
     if (eglContext == NULL) {
         Fatal("eglCreateContext() failed.\n");
     }
 
-    /* Find the EGLOutputLayer that corresponds to the DRM KMS plane. */
+    return eglContext;
+}
 
-    ret = pEglGetOutputLayersEXT(eglDpy, layerAttribs, &eglLayer, 1, &n);
+/*
+ * Set up EGL to present to a DRM KMS plane through an EGLStream.
+ */
+egl_display* GetEglDisplays(
+    EGLDisplay eglDpy,
+    EGLConfig eglConfig,
+    EGLContext eglContext,
+    kms_plane* Planes, int NumPlanes)
+{
+    EGLBoolean ret;
+    egl_display* Displays = malloc(sizeof(egl_display) * NumPlanes);
+    for (int PlaneIndex = 0; PlaneIndex < NumPlanes; PlaneIndex++) {
+        kms_plane* Plane = &Planes[PlaneIndex];
 
-    if (!ret || !n) {
-        Fatal("Unable to get EGLOutputLayer for plane 0x%08x\n", planeID);
+        EGLAttrib layerAttribs[] = {
+            EGL_DRM_PLANE_EXT,
+            Plane->PlaneID,
+            EGL_NONE,
+        };
+        printf("Setting up plane ID: %i\n", Plane->PlaneID);
+
+        EGLint streamAttribs[] = { EGL_NONE };
+
+        EGLint surfaceAttribs[] = {
+            EGL_WIDTH, Plane->Width,
+            EGL_HEIGHT, Plane->Height,
+            EGL_NONE
+        };
+
+        /* Find the EGLOutputLayer that corresponds to the DRM KMS plane. */
+        EGLOutputLayerEXT eglLayer;
+        EGLint n = 0;
+        ret = pEglGetOutputLayersEXT(eglDpy, layerAttribs, &eglLayer, 1, &n);
+
+        if (!ret || !n) {
+            Fatal("Unable to get EGLOutputLayer for plane 0x%08x\n", Plane->PlaneID);
+        }
+
+        /* Create an EGLStream. */
+        EGLStreamKHR eglStream = pEglCreateStreamKHR(eglDpy, streamAttribs);
+
+        if (eglStream == EGL_NO_STREAM_KHR) {
+            Fatal("Unable to create stream.\n");
+        }
+
+        /* Set the EGLOutputLayer as the consumer of the EGLStream. */
+
+        ret = pEglStreamConsumerOutputEXT(eglDpy, eglStream, eglLayer);
+
+        if (!ret) {
+            Fatal("Unable to create EGLOutput stream consumer.\n");
+        }
+
+        /*
+         * EGL_KHR_stream defines that normally stream consumers need to
+         * explicitly retrieve frames from the stream.  That may be useful
+         * when we attempt to better integrate
+         * EGL_EXT_stream_consumer_egloutput with DRM atomic KMS requests.
+         * But, EGL_EXT_stream_consumer_egloutput defines that by default:
+         *
+         *   On success, <layer> is bound to <stream>, <stream> is placed
+         *   in the EGL_STREAM_STATE_CONNECTING_KHR state, and EGL_TRUE is
+         *   returned.  Initially, no changes occur to the image displayed
+         *   on <layer>. When the <stream> enters state
+         *   EGL_STREAM_STATE_NEW_FRAME_AVAILABLE_KHR, <layer> will begin
+         *   displaying frames, without further action required on the
+         *   application's part, as they become available, taking into
+         *   account any timestamps, swap intervals, or other limitations
+         *   imposed by the stream or producer attributes.
+         *
+         * So, eglSwapBuffers() (to produce new frames) is sufficient for
+         * the frames to be displayed.  That behavior can be altered with
+         * the EGL_EXT_stream_acquire_mode extension.
+         */
+
+        /*
+         * Create an EGLSurface as the producer of the EGLStream.  Once
+         * the stream's producer and consumer are defined, the stream is
+         * ready to use.  eglSwapBuffers() calls for the EGLSurface will
+         * deliver to the stream's consumer, i.e., the DRM KMS plane
+         * corresponding to the EGLOutputLayer.
+         */
+
+        EGLSurface eglSurface = pEglCreateStreamProducerSurfaceKHR(eglDpy, eglConfig,
+                                                        eglStream, surfaceAttribs);
+        if (eglSurface == EGL_NO_SURFACE) {
+            Fatal("Unable to create EGLSurface stream producer.\n");
+        }
+
+        /*
+         * Make current to the EGLSurface, so that OpenGL rendering is
+         * directed to it.
+         */
+        // EGLint contextAttribs[] = { EGL_NONE };
+        EGLContext DisplayContext = eglContext;
+        //     eglCreateContext(eglDpy, eglConfig, eglContext, contextAttribs);
+        // if (eglContext == NULL) {
+        //     Fatal("eglCreateContext() failed.\n");
+        // }
+
+        ret = eglMakeCurrent(eglDpy, eglSurface, eglSurface, DisplayContext);
+
+        if (!ret) {
+            Fatal("Unable to make context and surface current.\n");
+        }
+
+        Displays[PlaneIndex].Width = Plane->Width;
+        Displays[PlaneIndex].Height = Plane->Height;
+        Displays[PlaneIndex].Surface = eglSurface;
+        Displays[PlaneIndex].Context = DisplayContext;
     }
 
-    /* Create an EGLStream. */
 
-    eglStream = pEglCreateStreamKHR(eglDpy, streamAttribs);
-
-    if (eglStream == EGL_NO_STREAM_KHR) {
-        Fatal("Unable to create stream.\n");
-    }
-
-    /* Set the EGLOutputLayer as the consumer of the EGLStream. */
-
-    ret = pEglStreamConsumerOutputEXT(eglDpy, eglStream, eglLayer);
-
-    if (!ret) {
-        Fatal("Unable to create EGLOutput stream consumer.\n");
-    }
-
-    /*
-     * EGL_KHR_stream defines that normally stream consumers need to
-     * explicitly retrieve frames from the stream.  That may be useful
-     * when we attempt to better integrate
-     * EGL_EXT_stream_consumer_egloutput with DRM atomic KMS requests.
-     * But, EGL_EXT_stream_consumer_egloutput defines that by default:
-     *
-     *   On success, <layer> is bound to <stream>, <stream> is placed
-     *   in the EGL_STREAM_STATE_CONNECTING_KHR state, and EGL_TRUE is
-     *   returned.  Initially, no changes occur to the image displayed
-     *   on <layer>. When the <stream> enters state
-     *   EGL_STREAM_STATE_NEW_FRAME_AVAILABLE_KHR, <layer> will begin
-     *   displaying frames, without further action required on the
-     *   application's part, as they become available, taking into
-     *   account any timestamps, swap intervals, or other limitations
-     *   imposed by the stream or producer attributes.
-     *
-     * So, eglSwapBuffers() (to produce new frames) is sufficient for
-     * the frames to be displayed.  That behavior can be altered with
-     * the EGL_EXT_stream_acquire_mode extension.
-     */
-
-    /*
-     * Create an EGLSurface as the producer of the EGLStream.  Once
-     * the stream's producer and consumer are defined, the stream is
-     * ready to use.  eglSwapBuffers() calls for the EGLSurface will
-     * deliver to the stream's consumer, i.e., the DRM KMS plane
-     * corresponding to the EGLOutputLayer.
-     */
-
-    eglSurface = pEglCreateStreamProducerSurfaceKHR(eglDpy, eglConfig,
-                                                    eglStream, surfaceAttribs);
-    if (eglSurface == EGL_NO_SURFACE) {
-        Fatal("Unable to create EGLSurface stream producer.\n");
-    }
-
-    /*
-     * Make current to the EGLSurface, so that OpenGL rendering is
-     * directed to it.
-     */
-
-    ret = eglMakeCurrent(eglDpy, eglSurface, eglSurface, eglContext);
-
-    if (!ret) {
-        Fatal("Unable to make context and surface current.\n");
-    }
-
-    return eglSurface;
+    return Displays;
 }

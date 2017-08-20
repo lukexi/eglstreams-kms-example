@@ -25,6 +25,14 @@
 
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
+#include "kms.h"
+
+typedef struct {
+    int Width;
+    int Height;
+    EGLSurface Surface;
+    EGLContext Context;
+} egl_display;
 
 EGLDeviceEXT GetEglDevice(void);
 
@@ -32,6 +40,14 @@ int GetDrmFd(EGLDeviceEXT device);
 
 EGLDisplay GetEglDisplay(EGLDeviceEXT device, int drmFd);
 
-EGLSurface SetUpEgl(EGLDisplay eglDpy, uint32_t planeID, int width, int height);
+EGLConfig GetEglConfig(EGLDisplay eglDpy);
+EGLContext GetEglContext(EGLDisplay eglDpy, EGLConfig eglConfig);
+
+egl_display* GetEglDisplays(
+    EGLDisplay eglDpy,
+    EGLConfig eglConfig,
+    EGLContext eglContext,
+    kms_plane* Planes,
+    int NumPlanes);
 
 #endif /* EGL_H */

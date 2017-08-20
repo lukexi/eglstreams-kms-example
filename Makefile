@@ -22,17 +22,15 @@ SOURCES += main.c
 SOURCES += egl.c
 SOURCES += kms.c
 SOURCES += utils.c
-SOURCES += eglgears.c
 
 HEADERS += egl.h
 HEADERS += eglextnv.h
 HEADERS += kms.h
 HEADERS += utils.h
-HEADERS += eglgears.h
 
 OBJECTS = $(SOURCES:.c=.o)
 
-EGLSTREAMS_KMS_EXAMPLE = eglstreams-kms-example
+EGLMULTI = eglmulti
 
 CFLAGS += -Wall -Wextra -g
 CFLAGS += -I /usr/include/libdrm
@@ -43,8 +41,8 @@ CFLAGS += -I khronos
 %.o: %.c $(HEADERS)
 	gcc -c $< -o $@ $(CFLAGS)
 
-$(EGLSTREAMS_KMS_EXAMPLE): $(OBJECTS)
-	gcc -o $@ $(OBJECTS) -lEGL -lOpenGL -ldrm -lm
+$(EGLMULTI): $(OBJECTS)
+	gcc -o $@ $(OBJECTS) -lEGL -lOpenGL -ldrm -lm -pthread
 
 clean:
-	rm -f *.o $(EGLSTREAMS_KMS_EXAMPLE) *~
+	rm -f *.o $(EGLMULTI) *~

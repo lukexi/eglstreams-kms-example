@@ -23,6 +23,12 @@
 #if !defined(KMS_H)
 #define KMS_H
 
-void SetMode(int drmFd, uint32_t *pPlaneID, int *pWidth, int *pHeight);
+typedef struct {
+    uint32_t PlaneID;
+    int Width;
+    int Height;
+} kms_plane;
+
+kms_plane* SetDisplayModes(int drmFd, int* NumPlanes);
 
 #endif /* KMS_H */

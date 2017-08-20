@@ -23,7 +23,9 @@
 #include "utils.h"
 #include "egl.h"
 #include "kms.h"
-#include "eglgears.h"
+#include "GL/gl.h"
+#include "math.h"
+#include <stdio.h>
 
 /*
  * Example code demonstrating how to connect EGL to DRM KMS using
@@ -32,29 +34,37 @@
 
 int main(void)
 {
-    EGLDisplay eglDpy;
-    EGLDeviceEXT eglDevice;
-    int drmFd, width, height;
-    uint32_t planeID = 0;
-    EGLSurface eglSurface;
-
+    // Setup global EGL device state
     GetEglExtensionFunctionPointers();
 
-    eglDevice = GetEglDevice();
+    EGLDeviceEXT eglDevice = GetEglDevice();
 
-    drmFd = GetDrmFd(eglDevice);
+    int drmFd = GetDrmFd(eglDevice);
 
-    SetMode(drmFd, &planeID, &width, &height);
+    EGLDisplay eglDpy     = GetEglDisplay(eglDevice, drmFd);
+    EGLConfig  eglConfig  = GetEglConfig(eglDpy);
+    EGLContext eglContext = GetEglContext(eglDpy, eglConfig);
 
-    eglDpy = GetEglDisplay(eglDevice, drmFd);
 
-    eglSurface = SetUpEgl(eglDpy, planeID, width, height);
-
-    InitGears(width, height);
+    // Set up EGL state for each connected display
+    int NumPlanes;
+    kms_plane* Planes     = SetDisplayModes(drmFd, &NumPlanes);
+    int NumDisplays = NumPlanes;
+    egl_display* Displays = GetEglDisplays(eglDpy, eglConfig, eglContext, Planes, NumPlanes);
 
     while(1) {
-        DrawGears();
-        eglSwapBuffers(eglDpy, eglSurface);
+        glClearColor(
+                (sin(GetTime()*3)/2+0.5) * 0.8,
+                (sin(GetTime()*5)/2+0.5) * 0.8,
+                (sin(GetTime()*7)/2+0.5) * 0.8,
+                1);
+
+        for (int DisplayIndex = 0; DisplayIndex < NumDisplays; DisplayIndex++) {
+            egl_display* Display = &Displays[DisplayIndex];
+            eglMakeCurrent(eglDpy, Display->Surface, Display->Surface, Display->Context);
+            glClear(GL_COLOR_BUFFER_BIT);
+            eglSwapBuffers(eglDpy, Display->Surface);
+        }
         PrintFps();
     }
 
