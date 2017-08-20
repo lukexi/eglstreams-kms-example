@@ -22,11 +22,13 @@ SOURCES += main.c
 SOURCES += egl.c
 SOURCES += kms.c
 SOURCES += utils.c
+SOURCES += edid.c
 
 HEADERS += egl.h
 HEADERS += eglextnv.h
 HEADERS += kms.h
 HEADERS += utils.h
+HEADERS += edid.h
 
 OBJECTS = $(SOURCES:.c=.o)
 

@@ -24,6 +24,7 @@
 #include <stddef.h>
 #include <stdbool.h>
 #include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
 #include <sys/mman.h>
 #include <unistd.h>
@@ -33,6 +34,7 @@
 
 #include "kms.h"
 #include "utils.h"
+#include "edid.h"
 
 struct Config {
     uint32_t connectorID;
@@ -40,6 +42,7 @@ struct Config {
     int crtcIndex;
     uint32_t planeID;
     drmModeModeInfo mode;
+    drmModePropertyBlobPtr edidBlobPtr;
     uint16_t width;
     uint16_t height;
 };
@@ -73,69 +76,6 @@ struct PropertyIDAddresses {
     const char *name;
     uint32_t *ptr;
 };
-
-
-/*
- * Check if this connector is connected and has usable modes and
- * CRTC.
- */
-static bool PickConnector(int drmFd,
-                          drmModeResPtr pModeRes,
-                          int connIndex,
-                          struct Config *pConfig) {
-
-    drmModeConnectorPtr pConnector =
-        drmModeGetConnector(drmFd, pModeRes->connectors[connIndex]);
-
-    if (pConnector == NULL) {
-        Fatal("Unable to query DRM-KMS information for "
-              "connector index %d\n", connIndex);
-    }
-
-    if ((pConnector->connection == DRM_MODE_CONNECTED) &&
-        (pConnector->count_modes > 0) &&
-        (pConnector->count_encoders > 0)) {
-
-        drmModeEncoderPtr pEncoder =
-            drmModeGetEncoder(drmFd, pConnector->encoders[0]);
-
-        if (pEncoder == NULL) {
-            Fatal("Unable to query DRM-KMS information for"
-                  "encoder 0x%08x\n", pConnector->encoders[0]);
-        }
-
-        pConfig->connectorID = pModeRes->connectors[connIndex];
-        pConfig->mode = pConnector->modes[0];
-        printf("Connector ID: %i\n", pConfig->connectorID);
-        printf("Connector ID: %i\n", connIndex);
-        printf("Num CRTCS: %i\n", pModeRes->count_crtcs);
-        printf("Num Connectors: %i\n", pModeRes->count_connectors);
-        for (int crtcIndex = 0; crtcIndex < pModeRes->count_crtcs; crtcIndex++) {
-            if (crtcIndex < connIndex) {
-                continue;
-            }
-
-            if ((pEncoder->possible_crtcs & (1 << crtcIndex)) == 0) {
-                continue;
-            }
-
-            pConfig->crtcID = pModeRes->crtcs[crtcIndex];
-            printf("CRTC ID: %i\n", pConfig->crtcID);
-            pConfig->crtcIndex = crtcIndex;
-            break;
-        }
-
-        if (pConfig->crtcID == 0) {
-            Fatal("Unable to select a suitable CRTC.\n");
-        }
-
-        drmModeFreeEncoder(pEncoder);
-    }
-
-    drmModeFreeConnector(pConnector);
-
-    return pConfig->connectorID != 0 && pConfig->crtcID != 0;
-}
 
 
 /*
@@ -183,6 +123,135 @@ static uint64_t GetPropertyValue(
 
     return value;
 }
+
+static drmModePropertyBlobPtr GetPropertyBlobValue(
+    int drmFd,
+    uint32_t objectID,
+    uint32_t objectType,
+    const char *propName)
+{
+    uint32_t i;
+    int found = 0;
+    drmModePropertyBlobPtr value = 0;
+    drmModeObjectPropertiesPtr pModeObjectProperties =
+        drmModeObjectGetProperties(drmFd, objectID, objectType);
+
+    for (i = 0; i < pModeObjectProperties->count_props; i++) {
+
+        drmModePropertyPtr pProperty =
+            drmModeGetProperty(drmFd, pModeObjectProperties->props[i]);
+
+        if (pProperty == NULL) {
+            Fatal("Unable to query property.\n");
+        }
+
+        if ((pProperty->flags & DRM_MODE_PROP_BLOB) &&
+            strcmp(propName, pProperty->name) == 0) {
+            value = drmModeGetPropertyBlob(
+                drmFd,
+                pModeObjectProperties->prop_values[i]);
+            found = 1;
+        }
+
+        drmModeFreeProperty(pProperty);
+
+        if (found) {
+            break;
+        }
+    }
+
+    drmModeFreeObjectProperties(pModeObjectProperties);
+
+    if (!found) {
+        Fatal("Unable to find value for property \'%s\'.\n", propName);
+    }
+
+    return value;
+}
+
+
+
+/*
+ * Check if this connector is connected and has usable modes and
+ * CRTC.
+ */
+static bool PickConnector(int drmFd,
+                          drmModeResPtr pModeRes,
+                          int connIndex,
+                          struct Config *pConfig) {
+
+    drmModeConnectorPtr pConnector =
+        drmModeGetConnector(drmFd, pModeRes->connectors[connIndex]);
+
+    if (pConnector == NULL) {
+        Fatal("Unable to query DRM-KMS information for "
+              "connector index %d\n", connIndex);
+    }
+
+    if ((pConnector->connection == DRM_MODE_CONNECTED) &&
+        (pConnector->count_modes > 0) &&
+        (pConnector->count_encoders > 0)) {
+
+        drmModeEncoderPtr pEncoder =
+            drmModeGetEncoder(drmFd, pConnector->encoders[0]);
+
+        if (pEncoder == NULL) {
+            Fatal("Unable to query DRM-KMS information for"
+                  "encoder 0x%08x\n", pConnector->encoders[0]);
+        }
+
+        pConfig->connectorID = pModeRes->connectors[connIndex];
+        pConfig->mode = pConnector->modes[0];
+        pConfig->edidBlobPtr = GetPropertyBlobValue(drmFd,
+            pModeRes->connectors[connIndex],
+            DRM_MODE_OBJECT_CONNECTOR,
+            "EDID");
+        printf("Got EDID blob %p of size %u.\n",
+               pConfig->edidBlobPtr->data,
+               pConfig->edidBlobPtr->length);
+
+        drm_edid* edid = calloc(1, sizeof(drm_edid));
+        int rc = edid_parse(edid,
+                pConfig->edidBlobPtr->data,
+                pConfig->edidBlobPtr->length);
+        if (!rc) {
+            printf("EDID data '%s', '%s', '%s'\n",
+                   edid->pnp_id,
+                   edid->monitor_name,
+                   edid->serial_number);
+        }
+
+        printf("Connector ID: %i\n", pConfig->connectorID);
+        printf("Connector ID: %i\n", connIndex);
+        printf("Num CRTCS: %i\n", pModeRes->count_crtcs);
+        printf("Num Connectors: %i\n", pModeRes->count_connectors);
+        for (int crtcIndex = 0; crtcIndex < pModeRes->count_crtcs; crtcIndex++) {
+            if (crtcIndex < connIndex) {
+                continue;
+            }
+
+            if ((pEncoder->possible_crtcs & (1 << crtcIndex)) == 0) {
+                continue;
+            }
+
+            pConfig->crtcID = pModeRes->crtcs[crtcIndex];
+            printf("CRTC ID: %i\n", pConfig->crtcID);
+            pConfig->crtcIndex = crtcIndex;
+            break;
+        }
+
+        if (pConfig->crtcID == 0) {
+            Fatal("Unable to select a suitable CRTC.\n");
+        }
+
+        drmModeFreeEncoder(pEncoder);
+    }
+
+    drmModeFreeConnector(pConnector);
+
+    return pConfig->connectorID != 0 && pConfig->crtcID != 0;
+}
+
 
 
 /*
