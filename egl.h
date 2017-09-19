@@ -32,6 +32,11 @@ int GetDrmFd(EGLDeviceEXT device);
 
 EGLDisplay GetEglDisplay(EGLDeviceEXT device, int drmFd);
 
-EGLSurface SetUpEgl(EGLDisplay eglDpy, uint32_t planeID, int width, int height);
+EGLSurface SetUpEgl(EGLDisplay eglDpy, uint32_t crtcId, uint32_t planeId, int width, int height, EGLStreamKHR *eglStream);
+
+EGLBoolean EglFlip(EGLDisplay eglDpy, EGLStreamKHR eglStream);
+EGLint EglCheckStreamState(EGLDisplay eglDpy, EGLStreamKHR eglStream);
+
+void EGLCheck(const char* name);
 
 #endif /* EGL_H */

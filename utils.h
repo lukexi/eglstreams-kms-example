@@ -39,6 +39,8 @@ EGLBoolean ExtensionIsSupported(
 
 void GetEglExtensionFunctionPointers(void);
 
+typedef EGLBoolean (EGLAPIENTRYP PFNEGLSTREAMCONSUMERACQUIREATTRIBNVPROC) (EGLDisplay dpy, EGLStreamKHR stream, const EGLAttrib *attrib_list);
+
 extern PFNEGLQUERYDEVICESEXTPROC pEglQueryDevicesEXT;
 extern PFNEGLQUERYDEVICESTRINGEXTPROC pEglQueryDeviceStringEXT;
 extern PFNEGLGETPLATFORMDISPLAYEXTPROC pEglGetPlatformDisplayEXT;
@@ -46,5 +48,7 @@ extern PFNEGLGETOUTPUTLAYERSEXTPROC pEglGetOutputLayersEXT;
 extern PFNEGLCREATESTREAMKHRPROC pEglCreateStreamKHR;
 extern PFNEGLSTREAMCONSUMEROUTPUTEXTPROC pEglStreamConsumerOutputEXT;
 extern PFNEGLCREATESTREAMPRODUCERSURFACEKHRPROC pEglCreateStreamProducerSurfaceKHR;
+extern PFNEGLSTREAMCONSUMERACQUIREATTRIBNVPROC pEglStreamConsumerAcquireAttribNV;
+extern PFNEGLQUERYSTREAMKHRPROC pEglQueryStreamKHR;
 
 #endif /* UTILS_H */

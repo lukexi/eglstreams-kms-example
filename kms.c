@@ -503,7 +503,7 @@ static void AssignAtomicRequest(int drmFd,
  * present, and its dimensions.  On failure, exit with a fatal error
  * message.
  */
-void SetMode(int drmFd, uint32_t *pPlaneID, int *pWidth, int *pHeight)
+void SetMode(int drmFd, uint32_t *pCrtcID, uint32_t *pPlaneID, int *pWidth, int *pHeight)
 {
     struct Config config = { 0 };
     drmModeAtomicReqPtr pAtomic;
@@ -529,6 +529,7 @@ void SetMode(int drmFd, uint32_t *pPlaneID, int *pWidth, int *pHeight)
     }
 
     *pPlaneID = config.planeID;
+    *pCrtcID = config.crtcID;
     *pWidth = config.width;
     *pHeight = config.height;
 }

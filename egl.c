@@ -29,6 +29,7 @@
 #include <EGL/eglext.h>
 
 #include <GL/gl.h>
+#include <stdio.h>
 
 #include "utils.h"
 #include "egl.h"
@@ -38,6 +39,21 @@
 #define EGL_DRM_MASTER_FD_EXT                   0x333C
 #endif
 
+#if !defined(EGL_CONSUMER_AUTO_ACQUIRE_EXT)
+#define EGL_CONSUMER_AUTO_ACQUIRE_EXT         0x332B
+#endif
+
+#if !defined(EGL_DRM_FLIP_EVENT_DATA_NV)
+#define EGL_DRM_FLIP_EVENT_DATA_NV            0x333E
+#endif
+
+#if !defined(EGL_RESOURCE_BUSY_EXT)
+#define EGL_RESOURCE_BUSY_EXT                        0x3353
+#endif
+
+#if !defined(EGL_BAD_STATE_KHR)
+#define EGL_BAD_STATE_KHR                 0x321C
+#endif
 
 /*
  * The EGL_EXT_device_base extension (or EGL_EXT_device_enumeration
@@ -229,11 +245,97 @@ EGLDisplay GetEglDisplay(EGLDeviceEXT device, int drmFd)
     return eglDpy;
 }
 
+void EGLCheck(const char* name) {
+    EGLint err = eglGetError();
+    if (err != EGL_SUCCESS) {
+        printf("%s: ", name);
+        switch (err) {
+            case EGL_NOT_INITIALIZED:
+                printf("EGL is not initialized, or could not be initialized, for the specified EGL display connection.\n");
+                break;
+            case EGL_BAD_ACCESS:
+                printf("EGL cannot access a requested resource (for example a context is bound in another thread).\n");
+                break;
+            case EGL_BAD_ALLOC:
+                printf("EGL failed to allocate resources for the requested operation.\n");
+                break;
+            case EGL_BAD_ATTRIBUTE:
+                printf("An unrecognized attribute or attribute value was passed in the attribute list.\n");
+                break;
+            case EGL_BAD_CONTEXT:
+                printf("An EGLContext argument does not name a valid EGL rendering context.\n");
+                break;
+            case EGL_BAD_CONFIG:
+                printf("An EGLConfig argument does not name a valid EGL frame buffer configuration.\n");
+                break;
+            case EGL_BAD_CURRENT_SURFACE:
+                printf("The current surface of the calling thread is a window, pixel buffer or pixmap that is no longer valid.\n");
+                break;
+            case EGL_BAD_DISPLAY:
+                printf("An EGLDisplay argument does not name a valid EGL display connection.\n");
+                break;
+            case EGL_BAD_SURFACE:
+                printf("An EGLSurface argument does not name a valid surface (window, pixel buffer or pixmap) configured for GL rendering.\n");
+                break;
+            case EGL_BAD_MATCH:
+                printf("Arguments are inconsistent (for example, a valid context requires buffers not supplied by a valid surface).\n");
+                break;
+            case EGL_BAD_PARAMETER:
+                printf("One or more argument values are invalid.\n");
+                break;
+            case EGL_BAD_NATIVE_PIXMAP:
+                printf("A NativePixmapType argument does not refer to a valid native pixmap.\n");
+                break;
+            case EGL_BAD_NATIVE_WINDOW:
+                printf("A NativeWindowType argument does not refer to a valid native window.\n");
+                break;
+            case EGL_CONTEXT_LOST:
+                printf("A power management event has occurred. The application must destroy all contexts and reinitialise OpenGL ES state and objects to continue rendering.\n");
+                break;
+            case EGL_RESOURCE_BUSY_EXT:
+                printf("An EGL Resource was busy.\n");
+                break;
+            case EGL_BAD_STATE_KHR:
+                printf("EGL detected a bad state.\n");
+                break;
+            default:
+                printf("Unknown EGL error %i.\n", err);
+                break;
+        }
+        exit(1);
+    }
+}
+
+EGLBoolean EglFlip(EGLDisplay eglDpy, EGLStreamKHR eglStream) {
+    EGLCheck("Before flip");
+    int flip_data = 1;
+
+    EGLAttrib acquire_attribs[] = {
+        EGL_DRM_FLIP_EVENT_DATA_NV, (EGLAttrib)flip_data,
+        EGL_NONE
+    };
+    EGLBoolean r = pEglStreamConsumerAcquireAttribNV(eglDpy, eglStream, acquire_attribs);
+    if (r == EGL_FALSE) {
+        EGLCheck("EGL Flip");
+    }
+    return r;
+}
+
+EGLint EglCheckStreamState(EGLDisplay eglDpy, EGLStreamKHR eglStream) {
+    EGLint streamState;
+    EGLBoolean r = pEglQueryStreamKHR(eglDpy, eglStream, EGL_STREAM_STATE_KHR, &streamState);
+    if (r == EGL_FALSE) {
+        EGLCheck("Query Stream");
+    }
+
+    return streamState;
+}
 
 /*
  * Set up EGL to present to a DRM KMS plane through an EGLStream.
  */
-EGLSurface SetUpEgl(EGLDisplay eglDpy, uint32_t planeID, int width, int height)
+EGLSurface SetUpEgl(EGLDisplay eglDpy,
+    uint32_t crtcID, uint32_t planeID, int width, int height, EGLStreamKHR *eglStreamOut)
 {
     EGLint configAttribs[] = {
         EGL_SURFACE_TYPE, EGL_STREAM_BIT_KHR,
@@ -249,12 +351,18 @@ EGLSurface SetUpEgl(EGLDisplay eglDpy, uint32_t planeID, int width, int height)
     EGLint contextAttribs[] = { EGL_NONE };
 
     EGLAttrib layerAttribs[] = {
+        // EGL_DRM_CRTC_EXT,
+        // crtcID,
         EGL_DRM_PLANE_EXT,
         planeID,
         EGL_NONE,
     };
 
-    EGLint streamAttribs[] = { EGL_NONE };
+    EGLint streamAttribs[] = {
+        EGL_STREAM_FIFO_LENGTH_KHR, 1,
+        EGL_CONSUMER_AUTO_ACQUIRE_EXT, EGL_FALSE,
+        EGL_NONE,
+    };
 
     EGLint surfaceAttribs[] = {
         EGL_WIDTH, width,
@@ -331,7 +439,7 @@ EGLSurface SetUpEgl(EGLDisplay eglDpy, uint32_t planeID, int width, int height)
     ret = pEglGetOutputLayersEXT(eglDpy, layerAttribs, &eglLayer, 1, &n);
 
     if (!ret || !n) {
-        Fatal("Unable to get EGLOutputLayer for plane 0x%08x\n", planeID);
+        Fatal("Unable to get EGLOutputLayer for crtc 0x%08x\n", crtcID);
     }
 
     /* Create an EGLStream. */
@@ -396,6 +504,8 @@ EGLSurface SetUpEgl(EGLDisplay eglDpy, uint32_t planeID, int width, int height)
     if (!ret) {
         Fatal("Unable to make context and surface current.\n");
     }
+    EGLCheck("Setup");
 
+    *eglStreamOut = eglStream;
     return eglSurface;
 }

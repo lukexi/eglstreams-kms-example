@@ -133,7 +133,8 @@ PFNEGLGETOUTPUTLAYERSEXTPROC pEglGetOutputLayersEXT = NULL;
 PFNEGLCREATESTREAMKHRPROC pEglCreateStreamKHR = NULL;
 PFNEGLSTREAMCONSUMEROUTPUTEXTPROC pEglStreamConsumerOutputEXT = NULL;
 PFNEGLCREATESTREAMPRODUCERSURFACEKHRPROC pEglCreateStreamProducerSurfaceKHR = NULL;
-
+PFNEGLSTREAMCONSUMERACQUIREATTRIBNVPROC pEglStreamConsumerAcquireAttribNV = NULL;
+PFNEGLQUERYSTREAMKHRPROC pEglQueryStreamKHR = NULL;
 void GetEglExtensionFunctionPointers(void)
 {
     pEglQueryDevicesEXT = (PFNEGLQUERYDEVICESEXTPROC)
@@ -156,4 +157,10 @@ void GetEglExtensionFunctionPointers(void)
 
     pEglCreateStreamProducerSurfaceKHR = (PFNEGLCREATESTREAMPRODUCERSURFACEKHRPROC)
         GetProcAddress("eglCreateStreamProducerSurfaceKHR");
+
+    pEglStreamConsumerAcquireAttribNV = (PFNEGLSTREAMCONSUMERACQUIREATTRIBNVPROC)
+        GetProcAddress("eglStreamConsumerAcquireAttribNV");
+
+    pEglQueryStreamKHR = (PFNEGLQUERYSTREAMKHRPROC)
+        GetProcAddress("eglQueryStreamKHR");
 }
