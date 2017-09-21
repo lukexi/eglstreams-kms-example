@@ -150,7 +150,7 @@ int GetDrmFd(EGLDeviceEXT device)
         Fatal("No DRM device file found for EGL device.\n");
     }
 
-    fd = open(drmDeviceFile, O_RDWR, 0);
+    fd = open(drmDeviceFile, O_RDWR | O_NONBLOCK, 0);
 
     if (fd < 0) {
         Fatal("Unable to open DRM device file.\n");

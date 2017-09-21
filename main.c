@@ -109,6 +109,10 @@ int main(void)
     DRMEventContext.version = 2;
 
     while(1) {
+        // printf("drmHandleEvent...");
+        // Ensure drmFd is opened with O_NONBLOCK!
+        drmHandleEvent(drmFd, &DRMEventContext);
+        // printf(" done.\n");
 
         if (DisplayReady) {
             // printf("Frame: %i\n", FrameCount++);
@@ -128,9 +132,9 @@ int main(void)
             DisplayReady = false;
         }
 
-        // printf("drmHandleEvent...");
-        drmHandleEvent(drmFd, &DRMEventContext);
-        // printf(" done.\n");
+
+
+
 
         PrintFps();
     }
