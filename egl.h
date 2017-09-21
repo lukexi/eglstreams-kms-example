@@ -26,6 +26,29 @@
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
 
+/* XXX khronos eglext.h does not yet have EGL_DRM_MASTER_FD_EXT */
+#if !defined(EGL_DRM_MASTER_FD_EXT)
+#define EGL_DRM_MASTER_FD_EXT                   0x333C
+#endif
+
+#if !defined(EGL_CONSUMER_AUTO_ACQUIRE_EXT)
+#define EGL_CONSUMER_AUTO_ACQUIRE_EXT         0x332B
+#endif
+
+#if !defined(EGL_DRM_FLIP_EVENT_DATA_NV)
+#define EGL_DRM_FLIP_EVENT_DATA_NV            0x333E
+#endif
+
+#if !defined(EGL_RESOURCE_BUSY_EXT)
+#define EGL_RESOURCE_BUSY_EXT                        0x3353
+#endif
+
+#if !defined(EGL_BAD_STATE_KHR)
+#define EGL_BAD_STATE_KHR                 0x321C
+#endif
+
+
+
 EGLDeviceEXT GetEglDevice(void);
 
 int GetDrmFd(EGLDeviceEXT device);

@@ -24,8 +24,11 @@
 #include "egl.h"
 #include "kms.h"
 #include "eglgears.h"
+#include <xf86drm.h>
 #include <stdio.h>
+#include <stdbool.h>
 #include <unistd.h>
+#include <time.h>
 /*
  * Example code demonstrating how to connect EGL to DRM KMS using
  * EGLStreams.
@@ -57,6 +60,18 @@ void PrintStreamState(EGLint streamState) {
 
 }
 
+bool FlipPending = false;
+int flip_data = 12345;
+static void PageFlipEventHandler(int fd, unsigned int frame,
+                    unsigned int sec, unsigned int usec,
+                    void *data)
+{
+    int* IntData = (int*)data;
+    // printf("EVENT HANDLER %i\n", *IntData);
+    (void)fd; (void)frame; (void)sec; (void)usec; (void)data;
+    FlipPending = false;
+}
+
 int main(void)
 {
     EGLDisplay eglDpy;
@@ -84,30 +99,53 @@ int main(void)
     InitGears(width, height);
 
     int FrameCount = 0;
+
+    drmEventContext DRMEventContext;
+
+    DRMEventContext.page_flip_handler = PageFlipEventHandler;
+    // DRMEventContext.vblank_handler = PageFlipEventHandler;
+    DRMEventContext.version = 2;
+
     while(1) {
 
-        printf("Frame: %i\n", FrameCount++);
+        // printf("Frame: %i\n", FrameCount++);
         DrawGears();
+
         eglSwapBuffers(eglDpy, eglSurface);
 
-// This seems to not be strictly necessary...
-#if 0
-        EGLint streamState = 0;
-        while (streamState != EGL_STREAM_STATE_NEW_FRAME_AVAILABLE_KHR) {
-            streamState = EglCheckStreamState(eglDpy, eglStream);
-            PrintStreamState(streamState);
-            printf("Waiting for frame available...\n");
-        }
-#endif
-
-        EGLBoolean r = pEglStreamConsumerAcquireAttribNV(eglDpy, eglStream, NULL);
-        if (r == EGL_FALSE) {
-            EGLCheck("EGL Flip");
-        }
-
-        // while (!EglFlip(eglDpy, eglStream)) {
-        //     printf("Waiting...\n");
+        // Wait for a new frame to be available
+        // EGLint streamState = 0;
+        // while (streamState != EGL_STREAM_STATE_NEW_FRAME_AVAILABLE_KHR) {
+        //     printf("Waiting for frame available...\n");
+        //     streamState = EglCheckStreamState(eglDpy, eglStream);
+        //     PrintStreamState(streamState);
         // }
+
+
+        // EGLBoolean r = pEglStreamConsumerAcquireAttribNV(eglDpy, eglStream, NULL);
+        // if (r == EGL_FALSE) {
+        //    EGLCheck("EglStreamConsumerAcquireAttribNV");
+        // }
+
+        // Acquire the new frame, and pass a data pointer to pass along to drmHandleEvent
+        EGLAttrib AcquireAttribs[] = {
+            EGL_DRM_FLIP_EVENT_DATA_NV, (EGLAttrib)&flip_data,
+            EGL_NONE
+        };
+        EGLBoolean r = pEglStreamConsumerAcquireAttribNV(eglDpy, eglStream, AcquireAttribs);
+        if (r == EGL_FALSE) {
+            EGLCheck("eglStreamConsumerAcquireAttribNV");
+        }
+
+        FlipPending = true;
+
+        while (FlipPending) {
+
+            // printf("drmHandleEvent...");
+            drmHandleEvent(drmFd, &DRMEventContext);
+            // printf(" done.\n");
+        }
+
         // usleep(16000);
         PrintFps();
     }
