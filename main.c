@@ -60,16 +60,18 @@ void PrintStreamState(EGLint streamState) {
 
 }
 
-bool FlipPending = false;
-int flip_data = 12345;
+bool DisplayReady = true;
+int DisplayID = 12345;
+
 static void PageFlipEventHandler(int fd, unsigned int frame,
                     unsigned int sec, unsigned int usec,
                     void *data)
 {
-    int* IntData = (int*)data;
+    int* ADisplayID = (int*)data;
+    (void)ADisplayID;
     // printf("EVENT HANDLER %i\n", *IntData);
     (void)fd; (void)frame; (void)sec; (void)usec; (void)data;
-    FlipPending = false;
+    DisplayReady = true;
 }
 
 int main(void)
@@ -98,7 +100,7 @@ int main(void)
 
     InitGears(width, height);
 
-    int FrameCount = 0;
+    // int FrameCount = 0;
 
     drmEventContext DRMEventContext;
 
@@ -108,45 +110,28 @@ int main(void)
 
     while(1) {
 
-        // printf("Frame: %i\n", FrameCount++);
-        DrawGears();
+        if (DisplayReady) {
+            // printf("Frame: %i\n", FrameCount++);
+            DrawGears();
 
-        eglSwapBuffers(eglDpy, eglSurface);
+            eglSwapBuffers(eglDpy, eglSurface);
+            // Acquire the new frame, and pass a data pointer to pass along to drmHandleEvent
+            EGLAttrib AcquireAttribs[] = {
+                EGL_DRM_FLIP_EVENT_DATA_NV, (EGLAttrib)&DisplayID,
+                EGL_NONE
+            };
+            EGLBoolean r = pEglStreamConsumerAcquireAttribNV(eglDpy, eglStream, AcquireAttribs);
+            if (r == EGL_FALSE) {
+                EGLCheck("eglStreamConsumerAcquireAttribNV");
+            }
 
-        // Wait for a new frame to be available
-        // EGLint streamState = 0;
-        // while (streamState != EGL_STREAM_STATE_NEW_FRAME_AVAILABLE_KHR) {
-        //     printf("Waiting for frame available...\n");
-        //     streamState = EglCheckStreamState(eglDpy, eglStream);
-        //     PrintStreamState(streamState);
-        // }
-
-
-        // EGLBoolean r = pEglStreamConsumerAcquireAttribNV(eglDpy, eglStream, NULL);
-        // if (r == EGL_FALSE) {
-        //    EGLCheck("EglStreamConsumerAcquireAttribNV");
-        // }
-
-        // Acquire the new frame, and pass a data pointer to pass along to drmHandleEvent
-        EGLAttrib AcquireAttribs[] = {
-            EGL_DRM_FLIP_EVENT_DATA_NV, (EGLAttrib)&flip_data,
-            EGL_NONE
-        };
-        EGLBoolean r = pEglStreamConsumerAcquireAttribNV(eglDpy, eglStream, AcquireAttribs);
-        if (r == EGL_FALSE) {
-            EGLCheck("eglStreamConsumerAcquireAttribNV");
+            DisplayReady = false;
         }
 
-        FlipPending = true;
+        // printf("drmHandleEvent...");
+        drmHandleEvent(drmFd, &DRMEventContext);
+        // printf(" done.\n");
 
-        while (FlipPending) {
-
-            // printf("drmHandleEvent...");
-            drmHandleEvent(drmFd, &DRMEventContext);
-            // printf(" done.\n");
-        }
-
-        // usleep(16000);
         PrintFps();
     }
 
